@@ -1,40 +1,35 @@
-import os
-from functools import lru_cache
-
-# Keep CPU usage small on Render
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
-
-from ai.config import EMBEDDING_MODEL
+import numpy as np
+from sklearn.feature_extraction.text import HashingVectorizer
 
 
-@lru_cache(maxsize=1)
-def get_model():
-    # Import only when an embedding is actually needed.
-    from sentence_transformers import SentenceTransformer
-
-    model = SentenceTransformer(
-        EMBEDDING_MODEL,
-        device="cpu",
-    )
-
-    return model
+# Lightweight CPU-only vectorizer.
+# No PyTorch / Torch / SentenceTransformers required.
+_vectorizer = HashingVectorizer(
+    n_features=384,
+    alternate_sign=False,
+    norm="l2",
+    lowercase=True,
+    ngram_range=(1, 2),
+)
 
 
 def embed_texts(texts: list[str]):
-    return get_model().encode(
-        texts,
-        normalize_embeddings=True,
-        show_progress_bar=False,
-        batch_size=16,
+    if not texts:
+        return np.empty(
+            (0, 384),
+            dtype=np.float32,
+        )
+
+    vectors = _vectorizer.transform(texts)
+
+    return vectors.toarray().astype(
+        np.float32
     )
 
 
 def embed_query(text: str):
-    return get_model().encode(
-        [text],
-        normalize_embeddings=True,
-        show_progress_bar=False,
-    )[0]
+    vector = _vectorizer.transform([text])
+
+    return vector.toarray()[0].astype(
+        np.float32
+    )

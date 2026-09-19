@@ -10,26 +10,69 @@ from ai.embeddings import embed_texts, embed_query
 
 ROOT = Path(__file__).resolve().parents[1]
 STORE = ROOT / "data" / "vectorstore"
-STORE.mkdir(parents=True, exist_ok=True)
 
+STORE.mkdir(
+    parents=True,
+    exist_ok=True,
+)
+
+
+# ---------------------------------------------------------
+# PDF TEXT EXTRACTION
+# ---------------------------------------------------------
 
 def extract_pdf(path: str) -> str:
-    reader = PdfReader(path)
+    """
+    Extract text from a normal text-based PDF.
+
+    For the production hackathon deployment we keep this
+    lightweight and avoid OCR/Tesseract.
+    """
+
+    try:
+        reader = PdfReader(path)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Could not read PDF: {exc}"
+        ) from exc
+
     pages = []
 
-    for page in reader.pages:
-        pages.append(page.extract_text() or "")
+    for page_number, page in enumerate(reader.pages):
 
-    text = "\n".join(pages).strip()
+        try:
+            text = page.extract_text() or ""
+        except Exception as exc:
+            print(
+                f"[PDF] Failed to extract page "
+                f"{page_number + 1}: {exc}",
+                flush=True,
+            )
+            text = ""
 
-    if not text:
+        if text.strip():
+            pages.append(text)
+
+    extracted_text = "\n".join(pages).strip()
+
+    if not extracted_text:
         raise ValueError(
             "No readable text found in the PDF. "
             "Please upload a text-based PDF."
         )
 
-    return text
+    print(
+        f"[PDF] Extraction successful | "
+        f"characters={len(extracted_text)}",
+        flush=True,
+    )
 
+    return extracted_text
+
+
+# ---------------------------------------------------------
+# TEXT CHUNKING
+# ---------------------------------------------------------
 
 def chunk_text(
     text: str,
@@ -43,6 +86,7 @@ def chunk_text(
         return []
 
     chunks = []
+
     start = 0
 
     while start < len(text):
@@ -68,6 +112,10 @@ def chunk_text(
     return chunks
 
 
+# ---------------------------------------------------------
+# SAFE PATH HELPERS
+# ---------------------------------------------------------
+
 def _safe(value: str) -> str:
     return (
         "".join(
@@ -87,13 +135,21 @@ def source_store(
     user_id: str,
     source_id: str,
 ):
-    """Separate vector collection for a specific source."""
+    """
+    Separate vector collection for a specific source,
+    such as a YouTube video.
+    """
+
     return (
         user_store(user_id)
         / "sources"
         / _safe(source_id)
     )
 
+
+# ---------------------------------------------------------
+# VECTOR INDEX
+# ---------------------------------------------------------
 
 def _write_index(
     folder: Path,
@@ -103,6 +159,12 @@ def _write_index(
     folder.mkdir(
         parents=True,
         exist_ok=True,
+    )
+
+    print(
+        f"[INDEX] Creating embeddings | "
+        f"chunks={len(chunks)}",
+        flush=True,
     )
 
     vectors = np.asarray(
@@ -123,6 +185,11 @@ def _write_index(
             ensure_ascii=False,
         ),
         encoding="utf-8",
+    )
+
+    print(
+        "[INDEX] Vector index saved",
+        flush=True,
     )
 
 
@@ -147,6 +214,10 @@ def build_index(
     )
 
 
+# ---------------------------------------------------------
+# DOCUMENT INDEXING
+# ---------------------------------------------------------
+
 def add_document(
     user_id: str,
     text: str,
@@ -162,11 +233,14 @@ def add_document(
 
     if chunks_file.exists():
 
-        existing = json.loads(
-            chunks_file.read_text(
-                encoding="utf-8"
+        try:
+            existing = json.loads(
+                chunks_file.read_text(
+                    encoding="utf-8"
+                )
             )
-        )
+        except Exception:
+            existing = []
 
     new_chunks = chunk_text(text)
 
@@ -179,6 +253,12 @@ def add_document(
             "No readable text found in the PDF."
         )
 
+    print(
+        f"[DOCUMENT] New chunks={len(new_chunks)} | "
+        f"Total chunks={len(all_chunks)}",
+        flush=True,
+    )
+
     _write_index(
         folder,
         all_chunks,
@@ -186,6 +266,10 @@ def add_document(
 
     return len(new_chunks)
 
+
+# ---------------------------------------------------------
+# YOUTUBE / OTHER SOURCE INDEXING
+# ---------------------------------------------------------
 
 def add_source_chunks(
     user_id: str,
@@ -215,6 +299,10 @@ def add_source_chunks(
     return len(clean)
 
 
+# ---------------------------------------------------------
+# RETRIEVAL
+# ---------------------------------------------------------
+
 def _retrieve_from_folder(
     folder: Path,
     query: str,
@@ -235,15 +323,25 @@ def _retrieve_from_folder(
     ):
         return []
 
-    chunks = json.loads(
-        chunks_file.read_text(
-            encoding="utf-8"
+    try:
+        chunks = json.loads(
+            chunks_file.read_text(
+                encoding="utf-8"
+            )
         )
-    )
 
-    vectors = np.load(
-        vectors_file
-    )
+        vectors = np.load(
+            vectors_file
+        )
+
+    except Exception as exc:
+
+        print(
+            f"[RETRIEVAL] Failed to load index: {exc}",
+            flush=True,
+        )
+
+        return []
 
     if (
         not chunks
