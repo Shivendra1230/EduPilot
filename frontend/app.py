@@ -7,7 +7,7 @@ import plotly.express as px
 from dotenv import load_dotenv
 
 load_dotenv()
-BACKEND = os.getenv("BACKEND_URL", "http://localhost:8000").rstrip("/")
+BACKEND = os.getenv("BACKEND_URL", "https://edupilot-backend-2iae.onrender.com").rstrip("/")
 
 # Each Streamlit session gets its own workspace.
 # This prevents old "demo" data from appearing in a fresh run.
@@ -162,7 +162,7 @@ def api_post(path, **kwargs):
 
 def error_text(response):
     if response is None:
-        return "Backend is not reachable. Start FastAPI on port 8000."
+        return "Backend is not reachable. Please check the deployed EduPilot API."
     try:
         return response.json().get("detail", response.text)
     except Exception:
