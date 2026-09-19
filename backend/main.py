@@ -1,3 +1,11 @@
+import os
+
+# Prevent PyTorch / OpenMP thread issues on small CPU instances
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
