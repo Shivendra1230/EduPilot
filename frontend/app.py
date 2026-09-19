@@ -162,11 +162,54 @@ def api_post(path, **kwargs):
 
 def error_text(response):
     if response is None:
-        return "Backend is not reachable. Please check the deployed EduPilot API."
+        return (
+            "Backend is not reachable. "
+            "Please check the deployed EduPilot API."
+        )
+
     try:
-        return response.json().get("detail", response.text)
+        data = response.json()
+
+        if isinstance(data, dict):
+            detail = data.get("detail")
+
+            if detail:
+                return (
+                    f"Backend error ({response.status_code}): "
+                    f"{detail}"
+                )
+
+            message = data.get("message")
+
+            if message:
+                return (
+                    f"Backend error ({response.status_code}): "
+                    f"{message}"
+                )
+
+            return (
+                f"Backend error ({response.status_code}): "
+                f"{data}"
+            )
+
+        return (
+            f"Backend error ({response.status_code}): "
+            f"{data}"
+        )
+
     except Exception:
-        return response.text or "Request failed."
+        text = (response.text or "").strip()
+
+        if text:
+            return (
+                f"Backend error ({response.status_code}): "
+                f"{text[:2000]}"
+            )
+
+        return (
+            f"Backend error ({response.status_code}): "
+            "Request failed."
+        )
 
 
 def load_topics(force=False):
