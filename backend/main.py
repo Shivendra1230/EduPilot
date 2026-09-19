@@ -7,8 +7,6 @@ from backend.routes.quiz import router as quiz_router
 from backend.routes.progress import router as progress_router
 from backend.routes.youtube import router as youtube_router
 
-Base.metadata.create_all(bind=engine)
-
 app = FastAPI(title="EduPilot API", version="1.0.0")
 
 app.add_middleware(
@@ -25,6 +23,17 @@ app.include_router(quiz_router)
 app.include_router(progress_router)
 app.include_router(youtube_router)
 
+
+@app.get("/")
+def root():
+    return {"status": "ok", "service": "EduPilot API"}
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "EduPilot API"}
+
+
+@app.on_event("startup")
+def startup():
+    Base.metadata.create_all(bind=engine)
