@@ -1,118 +1,145 @@
 import json
 import os
 import re
-from functools import lru_cache
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import requests
 from youtube_transcript_api import YouTubeTranscriptApi
-from youtube_transcript_api.proxies import WebshareProxyConfig
 
 from ai.llm import generate, generate_json
 from ai.prompts import youtube_topics_prompt, youtube_summary_prompt
-from ai.rag import add_source_chunks, retrieve_source, source_store
+from ai.rag import (
+    add_source_chunks,
+    chunk_text,
+    retrieve_source,
+    source_store,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
 VIDEO_ROOT = ROOT / "data" / "youtube"
-VIDEO_ROOT.mkdir(parents=True, exist_ok=True)
+
+VIDEO_ROOT.mkdir(
+    parents=True,
+    exist_ok=True,
+)
 
 
 # ---------------------------------------------------------
-# YouTube Transcript API
-# ---------------------------------------------------------
-
-@lru_cache(maxsize=1)
-def _youtube_api():
-    """
-    Create a YouTubeTranscriptApi client.
-
-    If Webshare credentials are available, all transcript
-    requests go through the rotating residential proxy.
-
-    Otherwise, fallback to direct requests.
-    """
-
-    username = os.getenv("WEBSHARE_PROXY_USERNAME", "").strip()
-    password = os.getenv("WEBSHARE_PROXY_PASSWORD", "").strip()
-
-    if username and password:
-        return YouTubeTranscriptApi(
-            proxy_config=WebshareProxyConfig(
-                proxy_username=username,
-                proxy_password=password,
-            )
-        )
-
-    return YouTubeTranscriptApi()
-
-
-# ---------------------------------------------------------
-# Extract YouTube Video ID
+# YOUTUBE VIDEO ID
 # ---------------------------------------------------------
 
 def extract_video_id(url: str) -> str:
+
     value = url.strip()
 
-    # Direct video ID
-    if re.fullmatch(r"[A-Za-z0-9_-]{11}", value):
+    if re.fullmatch(
+        r"[A-Za-z0-9_-]{11}",
+        value,
+    ):
         return value
 
     parsed = urlparse(value)
-    host = parsed.netloc.lower().replace("www.", "")
 
-    # youtube.com/watch?v=...
-    if host in {"youtube.com", "m.youtube.com"}:
-        video_id = parse_qs(parsed.query).get("v", [""])[0]
+    host = (
+        parsed.netloc
+        .lower()
+        .replace("www.", "")
+    )
 
-    # youtu.be/...
+    if host in {
+        "youtube.com",
+        "m.youtube.com",
+    }:
+
+        video_id = parse_qs(
+            parsed.query
+        ).get(
+            "v",
+            [""],
+        )[0]
+
     elif host == "youtu.be":
-        video_id = parsed.path.strip("/").split("/")[0]
+
+        video_id = (
+            parsed.path
+            .strip("/")
+            .split("/")[0]
+        )
 
     else:
         video_id = ""
 
-    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
-        raise ValueError("Enter a valid YouTube video URL.")
+    if not re.fullmatch(
+        r"[A-Za-z0-9_-]{11}",
+        video_id,
+    ):
+        raise ValueError(
+            "Enter a valid YouTube video URL."
+        )
 
     return video_id
 
 
 # ---------------------------------------------------------
-# Metadata path
+# METADATA PATH
 # ---------------------------------------------------------
 
-def _meta_path(user_id: str, video_id: str) -> Path:
-    safe_user_id = "".join(
-        c for c in user_id
+def _meta_path(
+    user_id: str,
+    video_id: str,
+) -> Path:
+
+    safe_user = "".join(
+        c
+        for c in user_id
         if c.isalnum() or c in "-_"
     )
 
-    folder = VIDEO_ROOT / "users" / safe_user_id / video_id
-    folder.mkdir(parents=True, exist_ok=True)
+    folder = (
+        VIDEO_ROOT
+        / "users"
+        / safe_user
+        / video_id
+    )
+
+    folder.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
     return folder / "metadata.json"
 
 
 # ---------------------------------------------------------
-# Video title
+# VIDEO TITLE
 # ---------------------------------------------------------
 
-def _video_title(video_id: str) -> str:
+def _video_title(
+    video_id: str,
+) -> str:
+
     try:
-        response = requests.get(
+
+        r = requests.get(
             "https://www.youtube.com/oembed",
             params={
-                "url": f"https://www.youtube.com/watch?v={video_id}",
+                "url": (
+                    "https://www.youtube.com/watch?v="
+                    f"{video_id}"
+                ),
                 "format": "json",
             },
             timeout=12,
         )
 
-        if response.ok:
+        if r.ok:
             return str(
-                response.json().get("title")
+                r.json().get(
+                    "title"
+                )
                 or "YouTube video"
             )
 
@@ -123,44 +150,154 @@ def _video_title(video_id: str) -> str:
 
 
 # ---------------------------------------------------------
-# Format timestamp
+# TIME FORMAT
 # ---------------------------------------------------------
 
-def _format_time(seconds: float) -> str:
-    total = max(0, int(seconds))
+def _format_time(
+    seconds: float,
+) -> str:
 
-    h, rem = divmod(total, 3600)
-    m, s = divmod(rem, 60)
+    total = max(
+        0,
+        int(seconds),
+    )
+
+    h, rem = divmod(
+        total,
+        3600,
+    )
+
+    m, s = divmod(
+        rem,
+        60,
+    )
 
     if h:
-        return f"{h:02d}:{m:02d}:{s:02d}"
+        return (
+            f"{h:02d}:"
+            f"{m:02d}:"
+            f"{s:02d}"
+        )
 
-    return f"{m:02d}:{s:02d}"
+    return (
+        f"{m:02d}:"
+        f"{s:02d}"
+    )
 
 
 # ---------------------------------------------------------
-# Fetch transcript
+# TRANSCRIPT API
 # ---------------------------------------------------------
 
-def _get_transcript(video_id: str):
-    api = _youtube_api()
+def _create_transcript_api():
+
+    username = os.getenv(
+        "WEBSHARE_PROXY_USERNAME"
+    )
+
+    password = os.getenv(
+        "WEBSHARE_PROXY_PASSWORD"
+    )
+
+    # -----------------------------------------------------
+    # USE WEBSHARE PROXY ON RENDER
+    # -----------------------------------------------------
+
+    if username and password:
+
+        try:
+
+            from youtube_transcript_api.proxies import (
+                WebshareProxyConfig,
+            )
+
+            print(
+                "[YOUTUBE] Webshare proxy configured",
+                flush=True,
+            )
+
+            proxy_config = WebshareProxyConfig(
+                proxy_username=username,
+                proxy_password=password,
+                filter_ip_locations=[
+                    "us",
+                    "de",
+                    "gb",
+                ],
+            )
+
+            return YouTubeTranscriptApi(
+                proxy_config=proxy_config,
+            )
+
+        except Exception as exc:
+
+            print(
+                "[YOUTUBE] Failed to configure "
+                f"Webshare proxy: {exc}",
+                flush=True,
+            )
+
+    # -----------------------------------------------------
+    # FALLBACK DIRECT CONNECTION
+    # -----------------------------------------------------
+
+    print(
+        "[YOUTUBE] No Webshare credentials found. "
+        "Using direct connection.",
+        flush=True,
+    )
+
+    return YouTubeTranscriptApi()
+
+
+# ---------------------------------------------------------
+# GET TRANSCRIPT
+# ---------------------------------------------------------
+
+def _get_transcript(
+    video_id: str,
+):
+
+    api = _create_transcript_api()
 
     errors = []
 
-    # First try English / Hindi
+    # -----------------------------------------------------
+    # TRY ENGLISH + HINDI
+    # -----------------------------------------------------
+
     for languages in (
         ["en", "hi"],
         ["hi", "en"],
     ):
+
         try:
+
+            print(
+                "[YOUTUBE] Fetching transcript | "
+                f"languages={languages}",
+                flush=True,
+            )
+
             fetched = api.fetch(
                 video_id,
                 languages=languages,
             )
 
-            snippets = list(fetched)
+            snippets = list(
+                fetched
+            )
 
             if snippets:
+
+                print(
+                    "[YOUTUBE] Transcript fetched | "
+                    f"language={fetched.language} | "
+                    f"snippets={len(snippets)}",
+                    flush=True,
+                )
+
                 return (
                     fetched.language,
                     fetched.language_code,
@@ -169,19 +306,48 @@ def _get_transcript(video_id: str):
                 )
 
         except Exception as exc:
-            errors.append(str(exc))
 
-    # If preferred languages are unavailable,
-    # try any available transcript.
+            print(
+                "[YOUTUBE] Transcript fetch failed: "
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+
+            errors.append(
+                str(exc)
+            )
+
+    # -----------------------------------------------------
+    # FALLBACK: FIND ANY AVAILABLE TRANSCRIPT
+    # -----------------------------------------------------
+
     try:
-        transcript_list = api.list(video_id)
-        available = list(transcript_list)
+
+        print(
+            "[YOUTUBE] Trying available transcript list",
+            flush=True,
+        )
+
+        transcript_list = api.list(
+            video_id
+        )
+
+        available = list(
+            transcript_list
+        )
 
         if available:
-            fetched = available[0].fetch()
-            snippets = list(fetched)
+
+            transcript = available[0]
+
+            fetched = transcript.fetch()
+
+            snippets = list(
+                fetched
+            )
 
             if snippets:
+
                 return (
                     fetched.language,
                     fetched.language_code,
@@ -190,9 +356,21 @@ def _get_transcript(video_id: str):
                 )
 
     except Exception as exc:
-        errors.append(str(exc))
 
-    # Better error message
+        print(
+            "[YOUTUBE] Transcript list failed: "
+            f"{type(exc).__name__}: {exc}",
+            flush=True,
+        )
+
+        errors.append(
+            str(exc)
+        )
+
+    # -----------------------------------------------------
+    # FINAL ERROR
+    # -----------------------------------------------------
+
     message = (
         "Transcript unavailable for this video. "
         "YouTube may be blocking the backend IP, "
@@ -201,29 +379,51 @@ def _get_transcript(video_id: str):
     )
 
     if errors:
-        message += f" Details: {errors[-1][:500]}"
 
-    raise ValueError(message)
+        message += (
+            f" Details: {errors[-1][:400]}"
+        )
+
+    raise ValueError(
+        message
+    )
 
 
 # ---------------------------------------------------------
-# Process YouTube video
+# PROCESS VIDEO
 # ---------------------------------------------------------
 
-def process_video(user_id: str, url: str):
-    video_id = extract_video_id(url)
+def process_video(
+    user_id: str,
+    url: str,
+):
 
-    # Fetch transcript
+    video_id = extract_video_id(
+        url
+    )
+
+    print(
+        f"[YOUTUBE] Processing video: {video_id}",
+        flush=True,
+    )
+
     (
         language,
         language_code,
         is_generated,
         snippets,
-    ) = _get_transcript(video_id)
+    ) = _get_transcript(
+        video_id
+    )
 
-    # Create chunks
+    # -----------------------------------------------------
+    # BUILD CHUNKS
+    # -----------------------------------------------------
+
     chunks = []
+
     current = []
+
     current_chars = 0
 
     for item in snippets:
@@ -242,19 +442,22 @@ def process_video(user_id: str, url: str):
             f"{text}"
         )
 
-        # ~1000 character chunks
         if (
             current
-            and current_chars + len(line) > 1000
+            and current_chars + len(line)
+            > 1000
         ):
+
             chunks.append(
                 " ".join(current)
             )
 
-            # Small overlap
             overlap = current[-1:]
 
-            current = overlap + [line]
+            current = (
+                overlap
+                + [line]
+            )
 
             current_chars = sum(
                 len(x) + 1
@@ -262,41 +465,69 @@ def process_video(user_id: str, url: str):
             )
 
         else:
-            current.append(line)
-            current_chars += len(line) + 1
+
+            current.append(
+                line
+            )
+
+            current_chars += (
+                len(line) + 1
+            )
 
     if current:
+
         chunks.append(
             " ".join(current)
         )
 
     if not chunks:
+
         raise ValueError(
-            "Transcript was retrieved but contained no usable text."
+            "Transcript was retrieved but "
+            "contained no readable text."
         )
 
-    # Store transcript chunks
+    # -----------------------------------------------------
+    # INDEX TRANSCRIPT
+    # -----------------------------------------------------
+
+    print(
+        f"[YOUTUBE] Indexing {len(chunks)} chunks",
+        flush=True,
+    )
+
     add_source_chunks(
         user_id,
         video_id,
         chunks,
     )
 
-    # Get video title
-    title = _video_title(video_id)
+    # -----------------------------------------------------
+    # TITLE
+    # -----------------------------------------------------
 
-    # Save metadata
+    title = _video_title(
+        video_id
+    )
+
     meta = {
         "video_id": video_id,
         "url": (
-            f"https://www.youtube.com/watch?v={video_id}"
+            "https://www.youtube.com/watch?v="
+            f"{video_id}"
         ),
         "title": title,
         "language": language,
         "language_code": language_code,
-        "is_generated": bool(is_generated),
-        "snippet_count": len(snippets),
-        "chunk_count": len(chunks),
+        "is_generated": bool(
+            is_generated
+        ),
+        "snippet_count": len(
+            snippets
+        ),
+        "chunk_count": len(
+            chunks
+        ),
     }
 
     _meta_path(
@@ -311,17 +542,23 @@ def process_video(user_id: str, url: str):
         encoding="utf-8",
     )
 
+    print(
+        "[YOUTUBE] Processing complete",
+        flush=True,
+    )
+
     return meta
 
 
 # ---------------------------------------------------------
-# Get video metadata
+# GET VIDEO
 # ---------------------------------------------------------
 
 def get_video(
     user_id: str,
     video_id: str,
 ):
+
     path = _meta_path(
         user_id,
         video_id,
@@ -338,7 +575,7 @@ def get_video(
 
 
 # ---------------------------------------------------------
-# Video RAG context
+# VIDEO CONTEXT
 # ---------------------------------------------------------
 
 def video_context(
@@ -347,6 +584,7 @@ def video_context(
     query: str,
     k: int = 7,
 ):
+
     return retrieve_source(
         user_id,
         video_id,
@@ -356,7 +594,7 @@ def video_context(
 
 
 # ---------------------------------------------------------
-# Read stored transcript chunks
+# STORED TRANSCRIPT
 # ---------------------------------------------------------
 
 def _video_transcript_chunks(
@@ -376,6 +614,7 @@ def _video_transcript_chunks(
         return []
 
     try:
+
         data = json.loads(
             chunks_path.read_text(
                 encoding="utf-8"
@@ -392,21 +631,14 @@ def _video_transcript_chunks(
         OSError,
         json.JSONDecodeError,
     ):
+
         return []
 
-
-# ---------------------------------------------------------
-# Get indexed transcript
-# ---------------------------------------------------------
 
 def get_video_transcript(
     user_id: str,
     video_id: str,
 ) -> list[str]:
-    """
-    Return the stored timestamped transcript
-    chunks exactly as indexed.
-    """
 
     return _video_transcript_chunks(
         user_id,
@@ -415,7 +647,7 @@ def get_video_transcript(
 
 
 # ---------------------------------------------------------
-# Extract learning topics
+# TOPIC EXTRACTION
 # ---------------------------------------------------------
 
 def extract_video_topics(
@@ -424,7 +656,8 @@ def extract_video_topics(
 ):
 
     transcript = (
-        "\n\n--- TRANSCRIPT CHUNK ---\n".join(
+        "\n\n--- TRANSCRIPT CHUNK ---\n"
+        .join(
             _video_transcript_chunks(
                 user_id,
                 video_id,
@@ -433,6 +666,7 @@ def extract_video_topics(
     )
 
     if not transcript.strip():
+
         raise ValueError(
             "Transcript is not indexed. "
             "Process the video first."
@@ -466,12 +700,13 @@ def extract_video_topics(
         str(x).strip()
         for x in data.get(
             "topics",
-            []
+            [],
         )
         if str(x).strip()
     ]
 
     if not topics:
+
         raise ValueError(
             "Groq could not identify clear "
             "learning topics in this transcript."
@@ -481,7 +716,7 @@ def extract_video_topics(
 
 
 # ---------------------------------------------------------
-# Video summary
+# VIDEO SUMMARY
 # ---------------------------------------------------------
 
 def summarize_video(
@@ -497,6 +732,7 @@ def summarize_video(
     )
 
     if not contexts:
+
         raise ValueError(
             "Process the video first."
         )
