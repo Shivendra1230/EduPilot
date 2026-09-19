@@ -28,7 +28,7 @@ def _extract_text_with_ocr(path: str) -> str:
     - Hindi + English mixed documents
 
     Uses:
-    - PyMuPDF for rendering PDF pages
+    - PyMuPDF for PDF rendering
     - pytesseract for OCR
     - Tesseract eng + hin language models
     """
@@ -53,29 +53,46 @@ def _extract_text_with_ocr(path: str) -> str:
     pages = []
 
     try:
+        total_pages = len(document)
+
         for page_number, page in enumerate(document):
 
-            # Render PDF page at high enough resolution
-            # for better OCR accuracy.
-            matrix = fitz.Matrix(2, 2)
+            print(
+                f"[OCR] Processing page "
+                f"{page_number + 1}/{total_pages}",
+                flush=True,
+            )
+
+            # 1.5x is lighter on Render than 2x
+            matrix = fitz.Matrix(1.5, 1.5)
 
             pixmap = page.get_pixmap(
                 matrix=matrix,
+                colorspace=fitz.csRGB,
                 alpha=False,
             )
 
-            image_bytes = pixmap.tobytes("png")
-
-            image = Image.open(
-                io.BytesIO(image_bytes)
+            image = Image.frombytes(
+                "RGB",
+                [pixmap.width, pixmap.height],
+                pixmap.samples,
             )
 
-            # Hindi + English OCR
-            text = pytesseract.image_to_string(
-                image,
-                lang="eng+hin",
-                config="--psm 6",
-            )
+            # Grayscale reduces OCR processing cost
+            image = image.convert("L")
+
+            try:
+                text = pytesseract.image_to_string(
+                    image,
+                    lang="eng+hin",
+                    config="--psm 6",
+                    timeout=30,
+                )
+            except RuntimeError as exc:
+                raise RuntimeError(
+                    f"OCR timed out or failed on page "
+                    f"{page_number + 1}: {exc}"
+                ) from exc
 
             text = text.strip()
 
@@ -96,22 +113,29 @@ def extract_pdf(path: str) -> str:
 
     Strategy:
     1. Try normal text extraction using pypdf.
-    2. If no readable text is found, use OCR.
+    2. If no readable text exists, use OCR.
     3. OCR supports Hindi + English.
     """
+
+    print(
+        "[PDF] Starting normal text extraction",
+        flush=True,
+    )
 
     reader = PdfReader(path)
 
     pages = []
 
-    # -----------------------------------------------------
-    # STEP 1: Normal PDF text extraction
-    # -----------------------------------------------------
+    for page_number, page in enumerate(reader.pages):
 
-    for page in reader.pages:
         try:
             text = page.extract_text() or ""
-        except Exception:
+        except Exception as exc:
+            print(
+                f"[PDF] pypdf failed on page "
+                f"{page_number + 1}: {exc}",
+                flush=True,
+            )
             text = ""
 
         if text.strip():
@@ -119,21 +143,44 @@ def extract_pdf(path: str) -> str:
 
     extracted_text = "\n".join(pages).strip()
 
-    # If normal PDF text exists, use it.
+    # Normal text-based PDF
     if extracted_text:
+
+        print(
+            f"[PDF] Normal extraction successful | "
+            f"characters={len(extracted_text)}",
+            flush=True,
+        )
+
         return extracted_text
 
-    # -----------------------------------------------------
-    # STEP 2: OCR fallback for scanned PDFs
-    # -----------------------------------------------------
+    # Scanned/image-based PDF
+    print(
+        "[PDF] No text layer found. Starting OCR...",
+        flush=True,
+    )
 
     try:
         ocr_text = _extract_text_with_ocr(path)
 
         if ocr_text.strip():
+
+            print(
+                f"[PDF] OCR successful | "
+                f"characters={len(ocr_text)}",
+                flush=True,
+            )
+
             return ocr_text
 
     except Exception as exc:
+
+        print(
+            f"[PDF] OCR failed: "
+            f"{type(exc).__name__}: {exc}",
+            flush=True,
+        )
+
         raise RuntimeError(
             "PDF contains no readable text and OCR failed. "
             f"Details: {exc}"
@@ -235,6 +282,12 @@ def _write_index(
         exist_ok=True,
     )
 
+    print(
+        f"[INDEX] Creating embeddings for "
+        f"{len(chunks)} chunks",
+        flush=True,
+    )
+
     vectors = np.asarray(
         embed_texts(chunks),
         dtype=np.float32,
@@ -253,6 +306,11 @@ def _write_index(
             ensure_ascii=False,
         ),
         encoding="utf-8",
+    )
+
+    print(
+        "[INDEX] Vector index saved",
+        flush=True,
     )
 
 
@@ -295,6 +353,7 @@ def add_document(
     )
 
     if chunks_file.exists():
+
         existing = json.loads(
             chunks_file.read_text(
                 encoding="utf-8"
@@ -311,6 +370,12 @@ def add_document(
         raise ValueError(
             "No readable text found in the PDF."
         )
+
+    print(
+        f"[DOCUMENT] New chunks={len(new_chunks)} | "
+        f"Total chunks={len(all_chunks)}",
+        flush=True,
+    )
 
     _write_index(
         folder,
