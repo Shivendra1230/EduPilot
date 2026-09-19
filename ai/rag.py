@@ -25,10 +25,10 @@ def _extract_text_with_ocr(path: str) -> str:
     Supports:
     - English
     - Hindi
-    - Hindi + English mixed documents
+    - Hindi + English mixed PDFs
 
     Uses:
-    - PyMuPDF for PDF rendering
+    - PyMuPDF for rendering
     - pytesseract for OCR
     - Tesseract eng + hin language models
     """
@@ -63,30 +63,29 @@ def _extract_text_with_ocr(path: str) -> str:
                 flush=True,
             )
 
-            # 1.5x is lighter on Render than 2x
-            matrix = fitz.Matrix(1.5, 1.5)
+            # Lower resolution to reduce
+            # Render CPU and memory usage.
+            matrix = fitz.Matrix(1.0, 1.0)
 
             pixmap = page.get_pixmap(
                 matrix=matrix,
-                colorspace=fitz.csRGB,
+                colorspace=fitz.csGRAY,
                 alpha=False,
             )
 
             image = Image.frombytes(
-                "RGB",
+                "L",
                 [pixmap.width, pixmap.height],
                 pixmap.samples,
             )
 
-            # Grayscale reduces OCR processing cost
-            image = image.convert("L")
-
+            # Hindi + English OCR
             try:
                 text = pytesseract.image_to_string(
                     image,
                     lang="eng+hin",
-                    config="--psm 6",
-                    timeout=30,
+                    config="--oem 1 --psm 6",
+                    timeout=60,
                 )
             except RuntimeError as exc:
                 raise RuntimeError(
@@ -95,6 +94,12 @@ def _extract_text_with_ocr(path: str) -> str:
                 ) from exc
 
             text = text.strip()
+
+            print(
+                f"[OCR] Page {page_number + 1} "
+                f"extracted {len(text)} characters",
+                flush=True,
+            )
 
             if text:
                 pages.append(
@@ -112,8 +117,8 @@ def extract_pdf(path: str) -> str:
     Extract text from a PDF.
 
     Strategy:
-    1. Try normal text extraction using pypdf.
-    2. If no readable text exists, use OCR.
+    1. Try normal pypdf extraction.
+    2. If no text layer exists, use OCR.
     3. OCR supports Hindi + English.
     """
 
@@ -122,7 +127,12 @@ def extract_pdf(path: str) -> str:
         flush=True,
     )
 
-    reader = PdfReader(path)
+    try:
+        reader = PdfReader(path)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Could not read PDF: {exc}"
+        ) from exc
 
     pages = []
 
@@ -143,7 +153,10 @@ def extract_pdf(path: str) -> str:
 
     extracted_text = "\n".join(pages).strip()
 
+    # -----------------------------------------------------
     # Normal text-based PDF
+    # -----------------------------------------------------
+
     if extracted_text:
 
         print(
@@ -154,7 +167,10 @@ def extract_pdf(path: str) -> str:
 
         return extracted_text
 
+    # -----------------------------------------------------
     # Scanned/image-based PDF
+    # -----------------------------------------------------
+
     print(
         "[PDF] No text layer found. Starting OCR...",
         flush=True,
@@ -176,7 +192,7 @@ def extract_pdf(path: str) -> str:
     except Exception as exc:
 
         print(
-            f"[PDF] OCR failed: "
+            f"[PDF] OCR failed | "
             f"{type(exc).__name__}: {exc}",
             flush=True,
         )
