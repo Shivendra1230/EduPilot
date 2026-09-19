@@ -27,10 +27,7 @@ def _extract_text_with_ocr(path: str) -> str:
     - Hindi
     - Hindi + English mixed PDFs
 
-    Uses:
-    - PyMuPDF for rendering
-    - pytesseract for OCR
-    - Tesseract eng + hin language models
+    Designed to keep CPU/RAM usage low on Render.
     """
 
     try:
@@ -63,9 +60,8 @@ def _extract_text_with_ocr(path: str) -> str:
                 flush=True,
             )
 
-            # Lower resolution to reduce
-            # Render CPU and memory usage.
-            matrix = fitz.Matrix(1.0, 1.0)
+            # Low resolution to reduce CPU/RAM usage.
+            matrix = fitz.Matrix(0.7, 0.7)
 
             pixmap = page.get_pixmap(
                 matrix=matrix,
@@ -79,25 +75,34 @@ def _extract_text_with_ocr(path: str) -> str:
                 pixmap.samples,
             )
 
-            # Hindi + English OCR
             try:
                 text = pytesseract.image_to_string(
                     image,
                     lang="eng+hin",
-                    config="--oem 1 --psm 6",
-                    timeout=60,
+                    config="--oem 1 --psm 11",
+                    timeout=15,
                 )
+
             except RuntimeError as exc:
-                raise RuntimeError(
-                    f"OCR timed out or failed on page "
-                    f"{page_number + 1}: {exc}"
-                ) from exc
+
+                print(
+                    f"[OCR] Page {page_number + 1} failed: "
+                    f"{exc}",
+                    flush=True,
+                )
+
+                text = ""
+
+            finally:
+                # Release page memory immediately.
+                image.close()
+                del pixmap
 
             text = text.strip()
 
             print(
-                f"[OCR] Page {page_number + 1} "
-                f"extracted {len(text)} characters",
+                f"[OCR] Page {page_number + 1}: "
+                f"{len(text)} characters",
                 flush=True,
             )
 
@@ -114,11 +119,11 @@ def _extract_text_with_ocr(path: str) -> str:
 
 def extract_pdf(path: str) -> str:
     """
-    Extract text from a PDF.
+    Extract text from PDF.
 
     Strategy:
-    1. Try normal pypdf extraction.
-    2. If no text layer exists, use OCR.
+    1. Try normal text extraction with pypdf.
+    2. If no readable text exists, use OCR.
     3. OCR supports Hindi + English.
     """
 
@@ -129,23 +134,32 @@ def extract_pdf(path: str) -> str:
 
     try:
         reader = PdfReader(path)
+
     except Exception as exc:
+
         raise RuntimeError(
             f"Could not read PDF: {exc}"
         ) from exc
 
     pages = []
 
+    # -----------------------------------------------------
+    # NORMAL TEXT EXTRACTION
+    # -----------------------------------------------------
+
     for page_number, page in enumerate(reader.pages):
 
         try:
             text = page.extract_text() or ""
+
         except Exception as exc:
+
             print(
                 f"[PDF] pypdf failed on page "
                 f"{page_number + 1}: {exc}",
                 flush=True,
             )
+
             text = ""
 
         if text.strip():
@@ -154,7 +168,7 @@ def extract_pdf(path: str) -> str:
     extracted_text = "\n".join(pages).strip()
 
     # -----------------------------------------------------
-    # Normal text-based PDF
+    # TEXT PDF
     # -----------------------------------------------------
 
     if extracted_text:
@@ -168,7 +182,7 @@ def extract_pdf(path: str) -> str:
         return extracted_text
 
     # -----------------------------------------------------
-    # Scanned/image-based PDF
+    # SCANNED PDF → OCR
     # -----------------------------------------------------
 
     print(
@@ -177,6 +191,7 @@ def extract_pdf(path: str) -> str:
     )
 
     try:
+
         ocr_text = _extract_text_with_ocr(path)
 
         if ocr_text.strip():
@@ -224,6 +239,7 @@ def chunk_text(
         return []
 
     chunks = []
+
     start = 0
 
     while start < len(text):
@@ -254,6 +270,7 @@ def chunk_text(
 # ---------------------------------------------------------
 
 def _safe(value: str) -> str:
+
     return (
         "".join(
             c
@@ -265,6 +282,7 @@ def _safe(value: str) -> str:
 
 
 def user_store(user_id: str):
+
     return STORE / _safe(user_id)
 
 
@@ -383,6 +401,7 @@ def add_document(
     )
 
     if not all_chunks:
+
         raise ValueError(
             "No readable text found in the PDF."
         )
@@ -418,6 +437,7 @@ def add_source_chunks(
     ]
 
     if not clean:
+
         raise ValueError(
             "No readable source text was found."
         )
